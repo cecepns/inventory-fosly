@@ -437,8 +437,8 @@ app.delete('/api/products/:id', authenticateToken, requireRole(['manager']), asy
   }
 })
 
-// Bulk insert products from orders
-app.post('/api/products/bulk-insert', authenticateToken, requireRole(['manager']), async (req, res) => {
+// Bulk insert incoming goods from orders
+app.post('/api/incoming-goods/bulk-insert', authenticateToken, requireRole(['manager', 'admin']), async (req, res) => {
   try {
     const { orderIds } = req.body
     
@@ -461,43 +461,48 @@ app.post('/api/products/bulk-insert', authenticateToken, requireRole(['manager']
     let errorCount = 0
     const errors = []
     
-    // Insert each order as a product
+    // Insert each order as incoming goods
     for (const order of orders) {
       try {
-        // Check if product code already exists
-        const [existing] = await db.execute('SELECT id FROM products WHERE code = ?', [order.product_code])
+        // Check if product exists
+        const [products] = await db.execute('SELECT code FROM products WHERE code = ?', [order.product_code])
         
-        if (existing.length > 0) {
+        if (products.length === 0) {
           errorCount++
           errors.push({
             code: order.product_code,
             name: order.product_name,
-            reason: 'Kode barang sudah ada'
+            reason: 'Produk tidak ditemukan di database. Silakan tambahkan produk terlebih dahulu.'
           })
           continue
         }
         
-        // Generate barcode_id from product_code
-        const barcode_id = order.product_code || `BRK-${Date.now()}-${Math.floor(Math.random() * 1000)}`
+        // Use order resi_number or generate unique one
+        const resi_number = order.resi_number || `ORD-${order.id}-${Date.now()}`
         
-        // Insert product
+        // Use platform and date from order, with defaults if not available
+        const platform = order.bank || 'Order'
+        const date = order.date || new Date().toISOString().split('T')[0]
+        
+        // Insert incoming goods
         await db.execute(
-          'INSERT INTO products (barcode_id, code, name, initial_stock, current_stock, category, brand) VALUES (?, ?, ?, ?, ?, ?, ?)',
+          'INSERT INTO incoming_goods (product_code, product_name, category, brand, resi_number, quantity, platform, date) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
           [
-            barcode_id,
             order.product_code,
             order.product_name,
-            order.quantity,
-            order.quantity,
             order.category,
-            order.brand
+            order.brand,
+            resi_number,
+            order.quantity,
+            platform,
+            date
           ]
         )
         
         successCount++
         
         // Log activity
-        await logActivity(req.user.id, 'BULK_INSERT_PRODUCT', `Bulk inserted product from order: ${order.product_name} (${order.product_code})`)
+        await logActivity(req.user.id, 'BULK_INSERT_INCOMING_GOODS', `Bulk inserted incoming goods from order: ${order.product_name} (${order.product_code})`)
       } catch (error) {
         errorCount++
         errors.push({
@@ -509,13 +514,13 @@ app.post('/api/products/bulk-insert', authenticateToken, requireRole(['manager']
     }
     
     res.json({
-      message: `Bulk insert completed: ${successCount} success, ${errorCount} failed`,
+      message: `Bulk insert completed: ${successCount} berhasil, ${errorCount} gagal`,
       successCount,
       errorCount,
       errors: errors.length > 0 ? errors : undefined
     })
   } catch (error) {
-    console.error('Bulk insert products error:', error)
+    console.error('Bulk insert incoming goods error:', error)
     res.status(500).json({ message: 'Server error' })
   }
 })
@@ -1274,7 +1279,8 @@ app.get('/api/orders/summary', authenticateToken, async (req, res) => {
         COUNT(*) as total_orders,
         SUM(price * quantity) / SUM(quantity) as average_price,
         MIN(date) as first_order_date,
-        MAX(date) as last_order_date
+        MAX(date) as last_order_date,
+        GROUP_CONCAT(DISTINCT resi_number ORDER BY date DESC SEPARATOR ', ') as resi_numbers
       FROM orders 
       ${whereClause}
       GROUP BY product_code, product_name, category, brand

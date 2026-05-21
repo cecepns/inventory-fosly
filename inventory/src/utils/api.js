@@ -4,7 +4,7 @@ import axios from "axios";
 const api = axios.create({
   // In development, use relative paths (proxy will handle them)
   // In production, use the full API URL
-  baseURL: "https://api-inventory.isavralabel.com",
+  baseURL: "https://api.kingcreativestudio.my.id/inventory-fosly",
   // baseURL: "http://localhost:5000",
   timeout: 10000,
   headers: {

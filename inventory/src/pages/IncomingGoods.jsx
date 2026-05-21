@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { FiPlus, FiTrendingUp, FiSearch, FiEdit2, FiTrash2, FiAlertTriangle } from 'react-icons/fi'
+import { FiPlus, FiTrendingUp, FiSearch, FiEdit2, FiTrash2, FiAlertTriangle, FiPackage } from 'react-icons/fi'
 import api from '../utils/api'
 import { useNotification } from '../contexts/NotificationContext'
 import { useAuth } from '../contexts/AuthContext'
@@ -26,6 +26,29 @@ export default function IncomingGoods() {
   const [resiCheckLoading, setResiCheckLoading] = useState(false)
   const [resiDuplicate, setResiDuplicate] = useState(null)
   const [productsData, setProductsData] = useState({})
+  
+  // Bulk insert states
+  const [showBulkInsert, setShowBulkInsert] = useState(false)
+  const [orders, setOrders] = useState([])
+  const [selectedOrders, setSelectedOrders] = useState([])
+  const [bulkInsertLoading, setBulkInsertLoading] = useState(false)
+  const [bulkInsertSearchTerm, setBulkInsertSearchTerm] = useState('')
+  const [allIncomingGoods, setAllIncomingGoods] = useState([])
+  
+  // Date filter for bulk insert orders (default: 1 week ago to today)
+  const getDefaultStartDate = () => {
+    const date = new Date()
+    date.setDate(date.getDate() - 7)
+    return date.toISOString().split('T')[0]
+  }
+  
+  const getDefaultEndDate = () => {
+    return new Date().toISOString().split('T')[0]
+  }
+  
+  const [orderStartDate, setOrderStartDate] = useState(getDefaultStartDate())
+  const [orderEndDate, setOrderEndDate] = useState(getDefaultEndDate())
+  
   const { showSuccess, showError } = useNotification()
   const { hasRole } = useAuth()
 
@@ -304,17 +327,199 @@ export default function IncomingGoods() {
     setShowForm(false)
   }
 
+  // Fetch orders for bulk insert
+  const fetchOrders = async () => {
+    try {
+      const response = await api.get('/api/orders', {
+        params: {
+          page: 1,
+          limit: 1000, // Get all orders
+          startDate: orderStartDate,
+          endDate: orderEndDate
+        }
+      })
+      setOrders(response.data.data || [])
+    } catch (err) {
+      console.error('Error fetching orders:', err)
+      showError('Gagal mengambil data orders')
+    }
+  }
+
+  // Fetch all incoming goods to check for duplicates
+  const fetchAllIncomingGoods = async () => {
+    try {
+      const response = await api.get('/api/incoming-goods', {
+        params: {
+          page: 1,
+          limit: 10000 // Get all incoming goods
+        }
+      })
+      setAllIncomingGoods(response.data.data || [])
+    } catch (error) {
+      console.error('Error fetching incoming goods:', error)
+      setAllIncomingGoods([])
+    }
+  }
+
+  // Handle bulk insert modal open
+  const handleOpenBulkInsert = () => {
+    if (!hasRole('manager') && !hasRole('admin')) {
+      showError('Hanya manager atau admin yang dapat melakukan bulk insert')
+      return
+    }
+    setShowBulkInsert(true)
+    fetchOrders()
+    fetchAllIncomingGoods()
+  }
+
+  // Handle bulk insert modal close
+  const handleCloseBulkInsert = () => {
+    setShowBulkInsert(false)
+    setSelectedOrders([])
+    setOrderStartDate(getDefaultStartDate())
+    setOrderEndDate(getDefaultEndDate())
+    setBulkInsertSearchTerm('')
+  }
+
+  // Check if order is already inserted into incoming goods
+  const isOrderAlreadyInserted = (order) => {
+    // Helper function to check if dates are within tolerance (3 days)
+    const isDateWithinTolerance = (date1, date2, toleranceDays = 3) => {
+      const d1 = new Date(date1)
+      const d2 = new Date(date2)
+      const diffTime = Math.abs(d2 - d1)
+      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24))
+      return diffDays <= toleranceDays
+    }
+
+    // Find exact matches: same product, resi, quantity, and date within tolerance
+    const exactMatches = allIncomingGoods.filter(
+      (incoming) =>
+        incoming.product_code === order.product_code &&
+        incoming.product_name === order.product_name &&
+        incoming.resi_number === order.resi_number &&
+        parseInt(incoming.quantity) === parseInt(order.quantity) &&
+        isDateWithinTolerance(incoming.date, order.date)
+    )
+
+    return exactMatches.length > 0
+  }
+
+  // Filter orders based on search term (already inserted orders are still shown but disabled)
+  const filteredOrders = orders.filter(order => {
+    // Filter by search term
+    if (bulkInsertSearchTerm) {
+      const searchLower = bulkInsertSearchTerm.toLowerCase()
+      const matchesSearch = 
+        order.product_code?.toLowerCase().includes(searchLower) ||
+        order.product_name?.toLowerCase().includes(searchLower) ||
+        order.category?.toLowerCase().includes(searchLower) ||
+        order.brand?.toLowerCase().includes(searchLower) ||
+        order.resi_number?.toLowerCase().includes(searchLower)
+      
+      if (!matchesSearch) {
+        return false
+      }
+    }
+    
+    return true
+  })
+
+  // Handle order selection (only allow selection of non-inserted orders)
+  const handleOrderSelection = (orderId) => {
+    const order = orders.find(o => o.id === orderId)
+    if (order && isOrderAlreadyInserted(order)) {
+      return // Don't allow selection of already inserted orders
+    }
+    
+    setSelectedOrders(prev => {
+      if (prev.includes(orderId)) {
+        return prev.filter(id => id !== orderId)
+      } else {
+        return [...prev, orderId]
+      }
+    })
+  }
+
+  // Handle select all orders (only select non-inserted orders)
+  const handleSelectAllOrders = () => {
+    const selectableOrderIds = filteredOrders
+      .filter(order => !isOrderAlreadyInserted(order))
+      .map(order => order.id)
+    
+    const allSelected = selectableOrderIds.length > 0 && 
+      selectableOrderIds.every(id => selectedOrders.includes(id))
+    
+    if (allSelected) {
+      setSelectedOrders([])
+    } else {
+      setSelectedOrders(prev => {
+        const newSelection = [...prev]
+        selectableOrderIds.forEach(id => {
+          if (!newSelection.includes(id)) {
+            newSelection.push(id)
+          }
+        })
+        return newSelection
+      })
+    }
+  }
+
+  // Handle bulk insert submit
+  const handleBulkInsertSubmit = async () => {
+    if (selectedOrders.length === 0) {
+      showError('Pilih minimal 1 order')
+      return
+    }
+
+    setBulkInsertLoading(true)
+
+    try {
+      const response = await api.post('/api/incoming-goods/bulk-insert', {
+        orderIds: selectedOrders
+      })
+
+      if (response.data.errorCount > 0) {
+        showError(
+          `${response.data.successCount} berhasil, ${response.data.errorCount} gagal. ${
+            response.data.errors ? response.data.errors.map(e => `${e.name}: ${e.reason}`).join('; ') : ''
+          }`
+        )
+      } else {
+        showSuccess(`${response.data.successCount} barang berhasil ditambahkan ke barang masuk`)
+      }
+
+      handleCloseBulkInsert()
+      refresh()
+    } catch (error) {
+      showError(error.response?.data?.message || 'Gagal melakukan bulk insert')
+    } finally {
+      setBulkInsertLoading(false)
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <h1 className="text-2xl font-bold text-gray-900">Barang Masuk</h1>
-        <button
-          onClick={() => setShowForm(true)}
-          className="btn btn-success flex items-center"
-        >
-          <FiPlus className="mr-2" />
-          Tambah Barang Masuk
-        </button>
+        <div className="flex gap-3">
+          {(hasRole('manager') || hasRole('admin')) && (
+            <button
+              onClick={handleOpenBulkInsert}
+              className="btn btn-primary flex items-center"
+            >
+              <FiPackage className="mr-2" />
+              Bulk Insert dari Order
+            </button>
+          )}
+          <button
+            onClick={() => setShowForm(true)}
+            className="btn btn-success flex items-center"
+          >
+            <FiPlus className="mr-2" />
+            Tambah Barang Masuk
+          </button>
+        </div>
       </div>
 
       {/* Search and Sort */}
@@ -344,6 +549,157 @@ export default function IncomingGoods() {
           </div>
         </div>
       </div>
+
+      {/* Bulk Insert Modal */}
+      {showBulkInsert && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 w-full max-w-6xl mx-4 max-h-[90vh] overflow-y-auto">
+            <h3 className="text-lg font-semibold mb-4">Bulk Insert dari Order</h3>
+            
+            {/* Filter Order by Date */}
+            <div className="mb-4">
+              <label className="form-label text-sm mb-2">Filter Tanggal Order</label>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs text-gray-600 mb-1 block">Dari Tanggal</label>
+                  <input
+                    type="date"
+                    className="form-input text-sm"
+                    value={orderStartDate}
+                    onChange={(e) => {
+                      setOrderStartDate(e.target.value)
+                      // Auto-fetch orders when date changes
+                      setTimeout(fetchOrders, 300)
+                    }}
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-gray-600 mb-1 block">Sampai Tanggal</label>
+                  <input
+                    type="date"
+                    className="form-input text-sm"
+                    value={orderEndDate}
+                    onChange={(e) => {
+                      setOrderEndDate(e.target.value)
+                      // Auto-fetch orders when date changes
+                      setTimeout(fetchOrders, 300)
+                    }}
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Search in bulk insert */}
+            <div className="mb-4">
+              <div className="relative">
+                <FiSearch className="absolute left-3 top-3 text-gray-400" size={20} />
+                <input
+                  type="text"
+                  placeholder="Cari order..."
+                  className="form-input pl-10"
+                  value={bulkInsertSearchTerm}
+                  onChange={(e) => setBulkInsertSearchTerm(e.target.value)}
+                />
+              </div>
+            </div>
+
+            {/* Orders List */}
+            <div className="mb-4">
+              <div className="flex justify-between items-center mb-2">
+                <span className="text-sm text-gray-600">
+                  {selectedOrders.length} order dipilih dari {filteredOrders.length} order
+                </span>
+                <button
+                  onClick={handleSelectAllOrders}
+                  className="text-sm text-blue-600 hover:text-blue-800"
+                >
+                  Pilih Semua (yang belum di-insert)
+                </button>
+              </div>
+              
+              <div className="border rounded-lg max-h-96 overflow-y-auto">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th className="w-12">
+                        <input
+                          type="checkbox"
+                          checked={filteredOrders.filter(o => !isOrderAlreadyInserted(o)).length > 0 && 
+                            filteredOrders.filter(o => !isOrderAlreadyInserted(o)).every(o => selectedOrders.includes(o.id))}
+                          onChange={handleSelectAllOrders}
+                        />
+                      </th>
+                      <th>Kode</th>
+                      <th>Nama Barang</th>
+                      <th>Kategori</th>
+                      <th>Merk</th>
+                      <th>Nomor Resi</th>
+                      <th>Jumlah</th>
+                      <th>Tanggal Order</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredOrders.map((order) => {
+                      const isAlreadyInserted = isOrderAlreadyInserted(order)
+                      return (
+                        <tr 
+                          key={order.id}
+                          className={isAlreadyInserted ? 'bg-red-100 opacity-75' : ''}
+                        >
+                          <td>
+                            <input
+                              type="checkbox"
+                              checked={selectedOrders.includes(order.id)}
+                              onChange={() => handleOrderSelection(order.id)}
+                              disabled={isAlreadyInserted}
+                            />
+                          </td>
+                          <td>{order.product_code}</td>
+                          <td>{order.product_name}</td>
+                          <td>{order.category}</td>
+                          <td>{order.brand}</td>
+                          <td>
+                            <span className="text-sm text-gray-700">
+                              {order.resi_number || '-'}
+                            </span>
+                          </td>
+                          <td>{order.quantity}</td>
+                          <td>{new Date(order.date).toLocaleDateString('id-ID')}</td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+                
+                {filteredOrders.length === 0 && (
+                  <div className="text-center py-8 text-gray-500">
+                    Tidak ada order ditemukan
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="flex justify-end space-x-3 pt-4">
+              <button
+                type="button"
+                onClick={handleCloseBulkInsert}
+                className="btn btn-secondary"
+                disabled={bulkInsertLoading}
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={handleBulkInsertSubmit}
+                disabled={bulkInsertLoading || selectedOrders.length === 0}
+                className="btn btn-success"
+              >
+                {bulkInsertLoading ? 'Memproses...' : `Insert ${selectedOrders.length} Order`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Form Modal */}
       {showForm && (

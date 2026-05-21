@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { FiPlus, FiEdit2, FiTrash2, FiSearch, FiPackage, FiDownload } from 'react-icons/fi'
+import { FiPlus, FiEdit2, FiTrash2, FiSearch, FiPackage } from 'react-icons/fi'
 import api from '../utils/api'
 import { useNotification } from '../contexts/NotificationContext'
 import { usePagination } from '../hooks/usePagination'
@@ -8,7 +8,6 @@ import Pagination from '../components/Pagination'
 export default function Products() {
   const [loading, setLoading] = useState(false)
   const [showForm, setShowForm] = useState(false)
-  const [showBulkInsertModal, setShowBulkInsertModal] = useState(false)
   const [editingProduct, setEditingProduct] = useState(null)
   const [searchTerm, setSearchTerm] = useState('')
   const [sortBy, setSortBy] = useState('brand')
@@ -20,26 +19,6 @@ export default function Products() {
     category: '',
     brand: ''
   })
-  
-  // Bulk insert states
-  const [orders, setOrders] = useState([])
-  const [selectedOrders, setSelectedOrders] = useState([])
-  const [loadingOrders, setLoadingOrders] = useState(false)
-  const [orderSearchTerm, setOrderSearchTerm] = useState('')
-  
-  // Date filter states (default: 1 week ago to today)
-  const getDefaultStartDate = () => {
-    const date = new Date()
-    date.setDate(date.getDate() - 7)
-    return date.toISOString().split('T')[0]
-  }
-  
-  const getDefaultEndDate = () => {
-    return new Date().toISOString().split('T')[0]
-  }
-  
-  const [startDate, setStartDate] = useState(getDefaultStartDate())
-  const [endDate, setEndDate] = useState(getDefaultEndDate())
   
   const { showSuccess, showError } = useNotification()
 
@@ -138,135 +117,17 @@ export default function Products() {
     setShowForm(false)
   }
 
-  // Fetch orders for bulk insert
-  const fetchOrdersForBulkInsert = async () => {
-    setLoadingOrders(true)
-    try {
-      const response = await api.get('/api/orders/summary', {
-        params: {
-          limit: 100, // Get more orders for selection
-          page: 1,
-          search: orderSearchTerm,
-          startDate: startDate,
-          endDate: endDate
-        }
-      })
-      setOrders(response.data.data || [])
-    } catch (error) {
-      showError('Gagal memuat data order')
-    } finally {
-      setLoadingOrders(false)
-    }
-  }
-
-  // Open bulk insert modal
-  const handleOpenBulkInsert = () => {
-    setShowBulkInsertModal(true)
-    setSelectedOrders([])
-    setOrderSearchTerm('')
-    fetchOrdersForBulkInsert()
-  }
-
-  // Handle order selection
-  const handleOrderToggle = (productCode) => {
-    setSelectedOrders(prev => {
-      if (prev.includes(productCode)) {
-        return prev.filter(code => code !== productCode)
-      } else {
-        return [...prev, productCode]
-      }
-    })
-  }
-
-  // Handle select all orders
-  const handleSelectAll = () => {
-    if (selectedOrders.length === orders.length) {
-      setSelectedOrders([])
-    } else {
-      setSelectedOrders(orders.map(order => order.product_code))
-    }
-  }
-
-  // Handle bulk insert submit
-  const handleBulkInsertSubmit = async () => {
-    if (selectedOrders.length === 0) {
-      showError('Pilih minimal satu produk untuk di-insert')
-      return
-    }
-
-    setLoading(true)
-    try {
-      // Get full order data for selected products
-      const response = await api.get('/api/orders', {
-        params: {
-          limit: 1000,
-          page: 1
-        }
-      })
-      
-      const allOrders = response.data.data || []
-      
-      // Filter orders that match selected product codes and get their IDs
-      const selectedOrderIds = allOrders
-        .filter(order => selectedOrders.includes(order.product_code))
-        .map(order => order.id)
-
-      // Call bulk insert API
-      const bulkResponse = await api.post('/api/products/bulk-insert', {
-        orderIds: selectedOrderIds
-      })
-
-      if (bulkResponse.data.errorCount > 0) {
-        const errorMessages = bulkResponse.data.errors
-          .map(err => `${err.code}: ${err.reason}`)
-          .join('\n')
-        showError(`${bulkResponse.data.message}\n\nError:\n${errorMessages}`)
-      } else {
-        showSuccess(bulkResponse.data.message)
-      }
-
-      // Close modal and refresh products
-      setShowBulkInsertModal(false)
-      setSelectedOrders([])
-      refresh()
-    } catch (error) {
-      showError(error.response?.data?.message || 'Gagal melakukan bulk insert')
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  // Search orders when search term or date filters change
-  useEffect(() => {
-    if (showBulkInsertModal) {
-      const timeoutId = setTimeout(() => {
-        fetchOrdersForBulkInsert()
-      }, 500)
-      return () => clearTimeout(timeoutId)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [orderSearchTerm, startDate, endDate, showBulkInsertModal])
-
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <h1 className="text-2xl font-bold text-gray-900">Data Produk</h1>
-        <div className="flex space-x-2">
-          <button
-            onClick={handleOpenBulkInsert}
-            className="btn btn-success flex items-center"
-          >
-            <FiDownload className="mr-2" />
-            Bulk Insert dari Order
-          </button>
-          <button
-            onClick={() => setShowForm(true)}
-            className="btn btn-primary flex items-center"
-          >
-            <FiPlus className="mr-2" />
-            Tambah Produk
-          </button>
-        </div>
+        <button
+          onClick={() => setShowForm(true)}
+          className="btn btn-primary flex items-center"
+        >
+          <FiPlus className="mr-2" />
+          Tambah Produk
+        </button>
       </div>
 
       {/* Search and Sort */}
@@ -300,183 +161,6 @@ export default function Products() {
           </div>
         </div>
       </div>
-
-      {/* Bulk Insert Modal */}
-      {showBulkInsertModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 w-full max-w-4xl mx-4 max-h-[90vh] overflow-hidden flex flex-col">
-            <h3 className="text-lg font-semibold mb-4">
-              Bulk Insert Produk dari Order
-            </h3>
-            
-            {/* Date Filter */}
-            <div className="mb-4">
-              <label className="form-label text-sm mb-2">Filter Tanggal Order</label>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-xs text-gray-600 mb-1 block">Dari Tanggal</label>
-                  <input
-                    type="date"
-                    className="form-input text-sm"
-                    value={startDate}
-                    onChange={(e) => setStartDate(e.target.value)}
-                  />
-                </div>
-                <div>
-                  <label className="text-xs text-gray-600 mb-1 block">Sampai Tanggal</label>
-                  <input
-                    type="date"
-                    className="form-input text-sm"
-                    value={endDate}
-                    onChange={(e) => setEndDate(e.target.value)}
-                  />
-                </div>
-              </div>
-            </div>
-            
-            {/* Search */}
-            <div className="mb-4">
-              <div className="relative">
-                <FiSearch className="absolute left-3 top-3 text-gray-400" size={20} />
-                <input
-                  type="text"
-                  placeholder="Cari produk dari order..."
-                  className="form-input pl-10"
-                  value={orderSearchTerm}
-                  onChange={(e) => setOrderSearchTerm(e.target.value)}
-                />
-              </div>
-            </div>
-
-            {/* Instructions */}
-            <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
-              <p className="text-sm text-blue-800">
-                <strong>Catatan:</strong> Pilih produk dari list order yang ingin ditambahkan ke data produk. 
-                Data yang akan disimpan: Kode, Nama, Kategori, Merk, dan Quantity (sebagai stok awal).
-              </p>
-            </div>
-
-            {/* Select All Checkbox */}
-            {!loadingOrders && orders.length > 0 && (
-              <div className="mb-2 flex items-center">
-                <input
-                  type="checkbox"
-                  id="select-all"
-                  checked={selectedOrders.length === orders.length}
-                  onChange={handleSelectAll}
-                  className="mr-2 h-4 w-4"
-                />
-                <label htmlFor="select-all" className="text-sm font-medium text-gray-700">
-                  Pilih Semua ({selectedOrders.length} dari {orders.length} dipilih)
-                </label>
-              </div>
-            )}
-
-            {/* Orders List */}
-            <div className="flex-1 overflow-y-auto border rounded-lg">
-              {loadingOrders ? (
-                <div className="flex justify-center items-center h-64">
-                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-500"></div>
-                </div>
-              ) : orders.length === 0 ? (
-                <div className="text-center py-8">
-                  <FiPackage className="mx-auto text-gray-400 mb-4" size={48} />
-                  <p className="text-gray-500">Tidak ada data order ditemukan</p>
-                </div>
-              ) : (
-                <table className="table">
-                  <thead className="sticky top-0 bg-gray-50">
-                    <tr>
-                      <th className="w-12">
-                        <input
-                          type="checkbox"
-                          checked={selectedOrders.length === orders.length}
-                          onChange={handleSelectAll}
-                          className="h-4 w-4"
-                        />
-                      </th>
-                      <th>Kode</th>
-                      <th>Nama Barang</th>
-                      <th>Kategori</th>
-                      <th>Merk</th>
-                      <th>Tanggal Order</th>
-                      <th>Total Qty</th>
-                      <th>Total Order</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {orders.map((order) => (
-                      <tr 
-                        key={order.product_code}
-                        className={selectedOrders.includes(order.product_code) ? 'bg-blue-50' : ''}
-                      >
-                        <td>
-                          <input
-                            type="checkbox"
-                            checked={selectedOrders.includes(order.product_code)}
-                            onChange={() => handleOrderToggle(order.product_code)}
-                            className="h-4 w-4"
-                          />
-                        </td>
-                        <td>{order.product_code}</td>
-                        <td>{order.product_name}</td>
-                        <td>{order.category}</td>
-                        <td>{order.brand}</td>
-                        <td>
-                          <div className="text-sm">
-                            <div className="text-gray-900">
-                              {order.first_order_date ? new Date(order.first_order_date).toLocaleDateString('id-ID') : '-'}
-                            </div>
-                            {order.first_order_date !== order.last_order_date && (
-                              <div className="text-xs text-gray-500">
-                                s/d {order.last_order_date ? new Date(order.last_order_date).toLocaleDateString('id-ID') : '-'}
-                              </div>
-                            )}
-                          </div>
-                        </td>
-                        <td>
-                          <span className="font-semibold text-primary-600">
-                            {order.total_quantity}
-                          </span>
-                        </td>
-                        <td>{order.total_orders}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </div>
-            
-            {/* Footer Buttons */}
-            <div className="flex justify-between items-center mt-4 pt-4 border-t">
-              <p className="text-sm text-gray-600">
-                {selectedOrders.length} produk dipilih
-              </p>
-              <div className="flex space-x-3">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowBulkInsertModal(false)
-                    setSelectedOrders([])
-                  }}
-                  className="btn btn-secondary"
-                  disabled={loading}
-                >
-                  Batal
-                </button>
-                <button
-                  type="button"
-                  onClick={handleBulkInsertSubmit}
-                  disabled={loading || selectedOrders.length === 0}
-                  className="btn btn-primary"
-                >
-                  {loading ? 'Menyimpan...' : `Simpan ${selectedOrders.length} Produk`}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Form Modal */}
       {showForm && (
