@@ -1,17 +1,9 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import tailwindcss from '@tailwindcss/vite'
 
-// https://vitejs.dev/config/
+// https://vite.dev/config/
 export default defineConfig({
-  plugins: [react()],
-  base: "/",
-  // server: {
-  //   proxy: {
-  //     '/api': {
-  //       // Development proxy - only used during npm run dev
-  //       target: 'https://api.kingcreativestudio.my.id',
-  //       changeOrigin: true,
-  //     },
-  //   },
-  // },
+  plugins: [react(), tailwindcss()],
+  base: '/',
 })

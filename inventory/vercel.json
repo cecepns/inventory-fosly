@@ -1,4 +1,7 @@
 {
+  "buildCommand": "npm run build",
+  "installCommand": "npm install --include=dev",
+  "outputDirectory": "dist",
   "routes": [
     {
       "src": "/[^.]+",
