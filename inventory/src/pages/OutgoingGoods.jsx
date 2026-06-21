@@ -6,6 +6,7 @@ import { useAuth } from '../contexts/AuthContext'
 import ProductSelect from '../components/ProductSelect'
 import { usePagination } from '../hooks/usePagination'
 import Pagination from '../components/Pagination'
+import { normalizeResi } from '../utils/resi'
 
 export default function OutgoingGoods() {
   const [loading, setLoading] = useState(false)
@@ -125,8 +126,9 @@ export default function OutgoingGoods() {
 
   // Function to check for duplicate resi numbers with debouncing
   const checkDuplicateResi = async (resiNumber, excludeId = null) => {
-    if (!resiNumber || resiNumber.trim() === '') {
-      setResiDuplicateStatus(prev => ({ ...prev, [resiNumber]: false }))
+    const trimmedResi = normalizeResi(resiNumber)
+    if (!trimmedResi) {
+      setResiDuplicateStatus(prev => ({ ...prev, '': false }))
       return false
     }
     
@@ -134,13 +136,13 @@ export default function OutgoingGoods() {
       const params = new URLSearchParams()
       if (excludeId) params.append('excludeId', excludeId)
       
-      const response = await api.get(`/api/outgoing-goods/check-resi/${resiNumber}?${params}`)
+      const response = await api.get(`/api/outgoing-goods/check-resi/${encodeURIComponent(trimmedResi)}?${params}`)
       const isDuplicate = response.data.isDuplicate
-      setResiDuplicateStatus(prev => ({ ...prev, [resiNumber]: isDuplicate }))
+      setResiDuplicateStatus(prev => ({ ...prev, [trimmedResi]: isDuplicate }))
       return isDuplicate
     } catch (error) {
       console.error('Error checking resi number:', error)
-      setResiDuplicateStatus(prev => ({ ...prev, [resiNumber]: false }))
+      setResiDuplicateStatus(prev => ({ ...prev, [trimmedResi]: false }))
       return false
     }
   }
@@ -160,9 +162,12 @@ export default function OutgoingGoods() {
 
   // Function to get duplicate count for a resi number
   const getDuplicateCount = (resiNumber) => {
-    if (!resiNumber) return 0
-    return outgoingGoods.filter(item => item.resi_number === resiNumber).length
+    const normalized = normalizeResi(resiNumber)
+    if (!normalized) return 0
+    return outgoingGoods.filter(item => normalizeResi(item.resi_number) === normalized).length
   }
+
+  const isResiDuplicate = resiDuplicateStatus[normalizeResi(formData.resi_number)] === true
 
   // Function to get today's date in YYYY-MM-DD format
   const getTodayDate = () => {
@@ -431,16 +436,21 @@ export default function OutgoingGoods() {
       return
     }
 
+    const payload = {
+      ...formData,
+      resi_number: normalizeResi(formData.resi_number)
+    }
+
     setLoading(true)
 
     try {
       if (editingItem) {
         // Update existing record
-        await api.put(`/api/outgoing-goods/${editingItem.id}`, formData)
+        await api.put(`/api/outgoing-goods/${editingItem.id}`, payload)
         showSuccess('Data berhasil diperbarui')
       } else {
         // Create new record
-        await api.post('/api/outgoing-goods', formData)
+        await api.post('/api/outgoing-goods', payload)
         showSuccess('Barang keluar berhasil ditambahkan')
       }
       resetForm()
@@ -515,7 +525,7 @@ export default function OutgoingGoods() {
 
       {/* Form Modal */}
       {showForm && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
           <div className="bg-white rounded-lg p-6 w-full max-w-md mx-4 max-h-screen overflow-y-auto">
             <h3 className="text-lg font-semibold mb-4">
               {editingItem ? 'Edit Barang Keluar' : 'Tambah Barang Keluar'}
@@ -603,27 +613,35 @@ export default function OutgoingGoods() {
                 <div className="relative">
                   <input
                     type="text"
-                    className={`form-input ${resiDuplicateStatus[formData.resi_number] ? 'border-red-500 bg-red-50' : ''}`}
+                    className={`form-input ${isResiDuplicate ? 'border-red-500 bg-red-50' : ''}`}
                     value={formData.resi_number}
                     onChange={(e) => {
                       const newResiNumber = e.target.value
                       setFormData({...formData, resi_number: newResiNumber})
-                      // Check for duplicates when resi number changes with debouncing
-                      if (newResiNumber.trim()) {
+                      if (normalizeResi(newResiNumber)) {
                         debouncedCheckResi(newResiNumber, editingItem?.id)
                       } else {
-                        setResiDuplicateStatus(prev => ({ ...prev, [newResiNumber]: false }))
+                        setResiDuplicateStatus({})
+                      }
+                    }}
+                    onBlur={() => {
+                      const trimmed = normalizeResi(formData.resi_number)
+                      if (trimmed !== formData.resi_number) {
+                        setFormData(prev => ({ ...prev, resi_number: trimmed }))
+                        if (trimmed) {
+                          debouncedCheckResi(trimmed, editingItem?.id)
+                        }
                       }
                     }}
                     required
                   />
-                  {resiDuplicateStatus[formData.resi_number] && (
+                  {isResiDuplicate && (
                     <div className="absolute right-3 top-1/2 transform -translate-y-1/2">
                       <FiAlertTriangle className="text-red-500" size={20} />
                     </div>
                   )}
                 </div>
-                {resiDuplicateStatus[formData.resi_number] && (
+                {isResiDuplicate && (
                   <p className="text-sm text-red-600 mt-1 flex items-center">
                     <FiAlertTriangle className="mr-1" size={14} />
                     Nomor resi ini sudah digunakan sebelumnya!
@@ -720,7 +738,7 @@ export default function OutgoingGoods() {
                 <button
                   type="submit"
                   disabled={loading || 
-                    resiDuplicateStatus[formData.resi_number] || 
+                    isResiDuplicate || 
                     !checkStockAvailability(formData.quantity) ||
                     (selectedProduct && selectedProduct.current_stock <= 0) ||
                     barcodeError

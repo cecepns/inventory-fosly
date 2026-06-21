@@ -8,6 +8,33 @@ require('dotenv').config()
 const app = express()
 const PORT = process.env.PORT || 5000
 
+function normalizeResiNumber(resi) {
+  if (resi == null) return ''
+  return String(resi).trim()
+}
+
+async function findDuplicateResi(table, resiNumber, excludeId = null) {
+  const normalized = normalizeResiNumber(resiNumber)
+  if (!normalized) return []
+
+  const allowedTables = { incoming_goods: true, outgoing_goods: true }
+  if (!allowedTables[table]) return []
+
+  let whereClause = 'WHERE TRIM(resi_number) = ?'
+  const params = [normalized]
+
+  if (excludeId) {
+    whereClause += ' AND id != ?'
+    params.push(excludeId)
+  }
+
+  const [duplicates] = await db.execute(
+    `SELECT id, product_name, date FROM ${table} ${whereClause}`,
+    params
+  )
+  return duplicates
+}
+
 // Middleware
 app.use(cors())
 app.use(express.json())
@@ -478,7 +505,7 @@ app.post('/api/incoming-goods/bulk-insert', authenticateToken, requireRole(['man
         }
         
         // Use order resi_number or generate unique one
-        const resi_number = order.resi_number || `ORD-${order.id}-${Date.now()}`
+        const resi_number = normalizeResiNumber(order.resi_number) || `ORD-${order.id}-${Date.now()}`
         
         // Use platform and date from order, with defaults if not available
         const platform = order.bank || 'Order'
@@ -625,23 +652,11 @@ app.get('/api/incoming-goods/check-resi/:resiNumber', authenticateToken, async (
   try {
     const { resiNumber } = req.params
     const { excludeId } = req.query
-    
-    let whereClause = 'WHERE resi_number = ?'
-    let params = [resiNumber]
-    
-    if (excludeId) {
-      whereClause += ' AND id != ?'
-      params.push(excludeId)
-    }
-    
-    const [duplicates] = await db.execute(
-      `SELECT id, product_name, date FROM incoming_goods ${whereClause}`,
-      params
-    )
-    
+    const duplicates = await findDuplicateResi('incoming_goods', resiNumber, excludeId)
+
     res.json({
       isDuplicate: duplicates.length > 0,
-      duplicates: duplicates
+      duplicates
     })
   } catch (error) {
     console.error('Check resi number error:', error)
@@ -652,11 +667,21 @@ app.get('/api/incoming-goods/check-resi/:resiNumber', authenticateToken, async (
 app.post('/api/incoming-goods', authenticateToken, async (req, res) => {
   try {
     const { product_code, product_name, category, brand, resi_number, quantity, platform, date } = req.body
-    
+    const normalizedResi = normalizeResiNumber(resi_number)
+
+    if (!normalizedResi) {
+      return res.status(400).json({ message: 'Nomor resi wajib diisi' })
+    }
+
+    const duplicates = await findDuplicateResi('incoming_goods', normalizedResi)
+    if (duplicates.length > 0) {
+      return res.status(400).json({ message: 'Nomor resi sudah digunakan sebelumnya!' })
+    }
+
     // Insert incoming goods record
     await db.execute(
       'INSERT INTO incoming_goods (product_code, product_name, category, brand, resi_number, quantity, platform, date) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-      [product_code, product_name, category, brand, resi_number, quantity, platform, date]
+      [product_code, product_name, category, brand, normalizedResi, quantity, platform, date]
     )
     
     // Stock is automatically updated by database trigger
@@ -675,7 +700,17 @@ app.put('/api/incoming-goods/:id', authenticateToken, requireRole(['manager']), 
   try {
     const { id } = req.params
     const { product_code, product_name, category, brand, resi_number, quantity, platform, date } = req.body
-    
+    const normalizedResi = normalizeResiNumber(resi_number)
+
+    if (!normalizedResi) {
+      return res.status(400).json({ message: 'Nomor resi wajib diisi' })
+    }
+
+    const duplicates = await findDuplicateResi('incoming_goods', normalizedResi, id)
+    if (duplicates.length > 0) {
+      return res.status(400).json({ message: 'Nomor resi sudah digunakan sebelumnya!' })
+    }
+
     // Get the original record to calculate stock adjustment
     const [originalRecord] = await db.execute('SELECT product_code, quantity FROM incoming_goods WHERE id = ?', [id])
     if (originalRecord.length === 0) {
@@ -688,7 +723,7 @@ app.put('/api/incoming-goods/:id', authenticateToken, requireRole(['manager']), 
     // Update incoming goods record
     await db.execute(
       'UPDATE incoming_goods SET product_code = ?, product_name = ?, category = ?, brand = ?, resi_number = ?, quantity = ?, platform = ?, date = ? WHERE id = ?',
-      [product_code, product_name, category, brand, resi_number, quantity, platform, date, id]
+      [product_code, product_name, category, brand, normalizedResi, quantity, platform, date, id]
     )
     
     // Manually adjust stock since triggers don't handle UPDATE operations
@@ -801,23 +836,11 @@ app.get('/api/outgoing-goods/check-resi/:resiNumber', authenticateToken, async (
   try {
     const { resiNumber } = req.params
     const { excludeId } = req.query
-    
-    let whereClause = 'WHERE resi_number = ?'
-    let params = [resiNumber]
-    
-    if (excludeId) {
-      whereClause += ' AND id != ?'
-      params.push(excludeId)
-    }
-    
-    const [duplicates] = await db.execute(
-      `SELECT id, product_name, date FROM outgoing_goods ${whereClause}`,
-      params
-    )
-    
+    const duplicates = await findDuplicateResi('outgoing_goods', resiNumber, excludeId)
+
     res.json({
       isDuplicate: duplicates.length > 0,
-      duplicates: duplicates
+      duplicates
     })
   } catch (error) {
     console.error('Check resi number error:', error)
@@ -828,7 +851,17 @@ app.get('/api/outgoing-goods/check-resi/:resiNumber', authenticateToken, async (
 app.post('/api/outgoing-goods', authenticateToken, async (req, res) => {
   try {
     const { product_code, product_name, category, brand, resi_number, quantity, barcode, date } = req.body
-    
+    const normalizedResi = normalizeResiNumber(resi_number)
+
+    if (!normalizedResi) {
+      return res.status(400).json({ message: 'Nomor resi wajib diisi' })
+    }
+
+    const duplicates = await findDuplicateResi('outgoing_goods', normalizedResi)
+    if (duplicates.length > 0) {
+      return res.status(400).json({ message: 'Nomor resi sudah digunakan sebelumnya!' })
+    }
+
     // Check if product has enough stock
     const [products] = await db.execute('SELECT current_stock FROM products WHERE code = ?', [product_code])
     if (products.length === 0) {
@@ -842,7 +875,7 @@ app.post('/api/outgoing-goods', authenticateToken, async (req, res) => {
     // Insert outgoing goods record
     await db.execute(
       'INSERT INTO outgoing_goods (product_code, product_name, category, brand, resi_number, quantity, barcode, date) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-      [product_code, product_name, category, brand, resi_number, quantity, barcode, date]
+      [product_code, product_name, category, brand, normalizedResi, quantity, barcode, date]
     )
     
     // Stock is automatically updated by database trigger
@@ -861,7 +894,17 @@ app.put('/api/outgoing-goods/:id', authenticateToken, requireRole(['manager']), 
   try {
     const { id } = req.params
     const { product_code, product_name, category, brand, resi_number, quantity, barcode, date } = req.body
-    
+    const normalizedResi = normalizeResiNumber(resi_number)
+
+    if (!normalizedResi) {
+      return res.status(400).json({ message: 'Nomor resi wajib diisi' })
+    }
+
+    const duplicates = await findDuplicateResi('outgoing_goods', normalizedResi, id)
+    if (duplicates.length > 0) {
+      return res.status(400).json({ message: 'Nomor resi sudah digunakan sebelumnya!' })
+    }
+
     // Get the original record to calculate stock adjustment
     const [originalRecord] = await db.execute('SELECT product_code, quantity FROM outgoing_goods WHERE id = ?', [id])
     if (originalRecord.length === 0) {
@@ -885,7 +928,7 @@ app.put('/api/outgoing-goods/:id', authenticateToken, requireRole(['manager']), 
     // Update outgoing goods record
     await db.execute(
       'UPDATE outgoing_goods SET product_code = ?, product_name = ?, category = ?, brand = ?, resi_number = ?, quantity = ?, barcode = ?, date = ? WHERE id = ?',
-      [product_code, product_name, category, brand, resi_number, quantity, barcode, date, id]
+      [product_code, product_name, category, brand, normalizedResi, quantity, barcode, date, id]
     )
     
     // Manually adjust stock since triggers don't handle UPDATE operations

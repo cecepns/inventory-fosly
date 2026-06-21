@@ -6,6 +6,7 @@ import { useAuth } from '../contexts/AuthContext'
 import ProductSelect from '../components/ProductSelect'
 import { usePagination } from '../hooks/usePagination'
 import Pagination from '../components/Pagination'
+import { normalizeResi } from '../utils/resi'
 
 export default function IncomingGoods() {
   const [loading, setLoading] = useState(false)
@@ -33,6 +34,7 @@ export default function IncomingGoods() {
   const [selectedOrders, setSelectedOrders] = useState([])
   const [bulkInsertLoading, setBulkInsertLoading] = useState(false)
   const [bulkInsertSearchTerm, setBulkInsertSearchTerm] = useState('')
+  const [showOnlyNotInserted, setShowOnlyNotInserted] = useState(true)
   const [allIncomingGoods, setAllIncomingGoods] = useState([])
   
   // Date filter for bulk insert orders (default: 1 week ago to today)
@@ -117,7 +119,8 @@ export default function IncomingGoods() {
 
   // Function to check for duplicate resi numbers with debouncing
   const checkDuplicateResi = async (resiNumber, excludeId = null) => {
-    if (!resiNumber || resiNumber.trim() === '') {
+    const trimmedResi = normalizeResi(resiNumber)
+    if (!trimmedResi) {
       setResiDuplicate(null)
       return false
     }
@@ -127,7 +130,7 @@ export default function IncomingGoods() {
       const params = new URLSearchParams()
       if (excludeId) params.append('excludeId', excludeId)
       
-      const response = await api.get(`/api/incoming-goods/check-resi/${resiNumber}?${params}`)
+      const response = await api.get(`/api/incoming-goods/check-resi/${encodeURIComponent(trimmedResi)}?${params}`)
       const isDuplicate = response.data.isDuplicate
       setResiDuplicate(isDuplicate ? response.data.duplicates : null)
       return isDuplicate
@@ -154,8 +157,9 @@ export default function IncomingGoods() {
 
   // Function to get duplicate count for a resi number
   const getDuplicateCount = (resiNumber) => {
-    if (!resiNumber) return 0
-    return incomingGoods.filter(item => item.resi_number === resiNumber).length
+    const normalized = normalizeResi(resiNumber)
+    if (!normalized) return 0
+    return incomingGoods.filter(item => normalizeResi(item.resi_number) === normalized).length
   }
 
   // Function to get barcode ID for a product
@@ -290,17 +294,22 @@ export default function IncomingGoods() {
       showError('Nomor resi sudah digunakan sebelumnya!')
       return
     }
+
+    const payload = {
+      ...formData,
+      resi_number: normalizeResi(formData.resi_number)
+    }
     
     setLoading(true)
 
     try {
       if (editingItem) {
         // Update existing record
-        await api.put(`/api/incoming-goods/${editingItem.id}`, formData)
+        await api.put(`/api/incoming-goods/${editingItem.id}`, payload)
         showSuccess('Data berhasil diperbarui')
       } else {
         // Create new record
-        await api.post('/api/incoming-goods', formData)
+        await api.post('/api/incoming-goods', payload)
         showSuccess('Barang masuk berhasil ditambahkan')
       }
       resetForm()
@@ -379,6 +388,7 @@ export default function IncomingGoods() {
     setOrderStartDate(getDefaultStartDate())
     setOrderEndDate(getDefaultEndDate())
     setBulkInsertSearchTerm('')
+    setShowOnlyNotInserted(true)
   }
 
   // Check if order is already inserted into incoming goods
@@ -397,7 +407,7 @@ export default function IncomingGoods() {
       (incoming) =>
         incoming.product_code === order.product_code &&
         incoming.product_name === order.product_name &&
-        incoming.resi_number === order.resi_number &&
+        normalizeResi(incoming.resi_number) === normalizeResi(order.resi_number) &&
         parseInt(incoming.quantity) === parseInt(order.quantity) &&
         isDateWithinTolerance(incoming.date, order.date)
     )
@@ -405,8 +415,11 @@ export default function IncomingGoods() {
     return exactMatches.length > 0
   }
 
-  // Filter orders based on search term (already inserted orders are still shown but disabled)
   const filteredOrders = orders.filter(order => {
+    if (showOnlyNotInserted && isOrderAlreadyInserted(order)) {
+      return false
+    }
+
     // Filter by search term
     if (bulkInsertSearchTerm) {
       const searchLower = bulkInsertSearchTerm.toLowerCase()
@@ -424,6 +437,8 @@ export default function IncomingGoods() {
     
     return true
   })
+
+  const notInsertedCount = orders.filter(order => !isOrderAlreadyInserted(order)).length
 
   // Handle order selection (only allow selection of non-inserted orders)
   const handleOrderSelection = (orderId) => {
@@ -552,7 +567,7 @@ export default function IncomingGoods() {
 
       {/* Bulk Insert Modal */}
       {showBulkInsert && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
           <div className="bg-white rounded-lg p-6 w-full max-w-6xl mx-4 max-h-[90vh] overflow-y-auto">
             <h3 className="text-lg font-semibold mb-4">Bulk Insert dari Order</h3>
             
@@ -590,7 +605,7 @@ export default function IncomingGoods() {
             </div>
 
             {/* Search in bulk insert */}
-            <div className="mb-4">
+            <div className="mb-4 space-y-3">
               <div className="relative">
                 <FiSearch className="absolute left-3 top-3 text-gray-400" size={20} />
                 <input
@@ -601,6 +616,16 @@ export default function IncomingGoods() {
                   onChange={(e) => setBulkInsertSearchTerm(e.target.value)}
                 />
               </div>
+              <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={showOnlyNotInserted}
+                  onChange={(e) => setShowOnlyNotInserted(e.target.checked)}
+                  className="rounded border-gray-300"
+                />
+                Hanya tampilkan order yang belum di-insert
+                <span className="text-gray-500">({notInsertedCount} belum di-insert)</span>
+              </label>
             </div>
 
             {/* Orders List */}
@@ -608,6 +633,7 @@ export default function IncomingGoods() {
               <div className="flex justify-between items-center mb-2">
                 <span className="text-sm text-gray-600">
                   {selectedOrders.length} order dipilih dari {filteredOrders.length} order
+                  {showOnlyNotInserted ? '' : ` (${notInsertedCount} belum di-insert)`}
                 </span>
                 <button
                   onClick={handleSelectAllOrders}
@@ -673,7 +699,11 @@ export default function IncomingGoods() {
                 
                 {filteredOrders.length === 0 && (
                   <div className="text-center py-8 text-gray-500">
-                    Tidak ada order ditemukan
+                    {showOnlyNotInserted && bulkInsertSearchTerm
+                      ? 'Tidak ada order yang belum di-insert untuk pencarian ini'
+                      : showOnlyNotInserted
+                        ? 'Semua order sudah di-insert'
+                        : 'Tidak ada order ditemukan'}
                   </div>
                 )}
               </div>
@@ -703,7 +733,7 @@ export default function IncomingGoods() {
 
       {/* Form Modal */}
       {showForm && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
           <div className="bg-white rounded-lg p-6 w-full max-w-md mx-4 max-h-screen overflow-y-auto">
             <h3 className="text-lg font-semibold mb-4">
               {editingItem ? 'Edit Barang Masuk' : 'Tambah Barang Masuk'}
@@ -778,11 +808,19 @@ export default function IncomingGoods() {
                     value={formData.resi_number}
                     onChange={(e) => {
                       setFormData({...formData, resi_number: e.target.value})
-                      // Check for duplicates when user types with debouncing
-                      if (e.target.value.trim()) {
+                      if (normalizeResi(e.target.value)) {
                         debouncedCheckResi(e.target.value, editingItem?.id)
                       } else {
                         setResiDuplicate(null)
+                      }
+                    }}
+                    onBlur={() => {
+                      const trimmed = normalizeResi(formData.resi_number)
+                      if (trimmed !== formData.resi_number) {
+                        setFormData(prev => ({ ...prev, resi_number: trimmed }))
+                        if (trimmed) {
+                          debouncedCheckResi(trimmed, editingItem?.id)
+                        }
                       }
                     }}
                     required
